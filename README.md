@@ -22,8 +22,8 @@ Hardware-verified on a GM1910 with `fastboot boot` (no partition was written):
   this reaches XNU; the first r14 boot panicked in `arm_vm_init`'s early I/O
   page-table reservation, not at kernel entry.
 - `boot-32-r15.img` requests a 3 GiB `/chosen/darwinboot-memory-size`, which
-  reserves enough early I/O page tables for the 36 MiB framebuffer. Hardware
-  confirmation is pending.
+  reserves enough early I/O page tables for the 36 MiB framebuffer.
+- **Hardware-verified:** r15 reaches the iOS userland on the panel.
 
 The GPU/GMU bring-up is a kernel-side blocker and is tracked in `ios-sweet`.
 

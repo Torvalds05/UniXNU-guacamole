@@ -2,9 +2,9 @@
 
 ## Active status (2026-10-22)
 
-- **Chain verified on hardware.** r13 boots the UniXNU menu and reads
-  `\EFI\UniXNU\unixnu.toml`; r14 reaches XNU's early console. No partition was
-  written.
+- **Full chain verified on hardware (2026-10-22).** r15 boots through
+  UniXNU -> DarwinBoot -> XNU -> iOS. The user confirmed the iOS userland on
+  the panel. No partition was written; every test used `fastboot boot`.
 - **r14 32 MiB alignment fix verified.** The first r14 boot panicked in the
   kernel, which proves the kernel entry and `start.s` mapping now work:
   ```
@@ -34,9 +34,9 @@
   - `mkadt.py` validates 256 MiB - 8 GiB in 2 MiB steps and exposes
     `--owned-memory-size`; `make-guacamole-adt.py` forwards it.
   - ADT dump confirms `darwinboot-memory-size = 0xc0000000`.
-- **r15 image:** `out/guacamole/boot/boot-32-r15.img` (72,302,592 bytes,
-  sha256 `ff672bce...`), FV `7bc92c83...`, payload `f74da572...`.
-  Hardware confirmation pending.
+- **r15 image verified:** `out/guacamole/boot/boot-32-r15.img`
+  (72,302,592 bytes, sha256 `ff672bce...`), FV `7bc92c83...`, payload
+  `f74da572...`. It reaches iOS on hardware.
 - Local UniXNU, DarwinBoot and Aloha changes are exported as
   `patches/*.patch`; the external trees remain ignored.
 
