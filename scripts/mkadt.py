@@ -56,9 +56,13 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False, device='sweet', dram_size=None):
+def build(seed=None, qemu=False, highmem=False, device='sweet', dram_size=None, owned_memory_size=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py).
-    dram_size overrides the profile's kernel RAM size (e.g. 0x180000000 on an 8 GB guacamole)."""
+    dram_size overrides the profile's kernel RAM size (e.g. 0x180000000 on an 8 GB guacamole).
+    owned_memory_size emits /chosen/darwinboot-memory-size for the contiguous kernel window."""
+    if owned_memory_size is not None and (
+            not 0x10000000 <= owned_memory_size <= 0x200000000 or owned_memory_size & 0x1FFFFF):
+        raise SystemExit('owned-memory-size must be 256 MiB..8 GiB in 2 MiB steps')
     dev = devices.get(device)
     phys_base, mem_size = (dev['high_phys_base'], dev['high_mem_size']) if highmem else (dev['phys_base'], dev['mem_size'])
     if dram_size is not None:
@@ -76,6 +80,7 @@ def build(seed=None, qemu=False, highmem=False, device='sweet', dram_size=None):
         ph(),
         ('dram-base', u64(phys_base)),
         ('dram-size', u64(mem_size)),
+        *([('darwinboot-memory-size', u64(owned_memory_size))] if owned_memory_size else []),
         ('random-seed', seed),
         ('debug-enabled', u32(1)),
         ('firmware-version', cstr('sweet-shim')),
@@ -234,6 +239,8 @@ if __name__ == '__main__':
     ap.add_argument('--highmem', action='store_true', help='kernel RAM from the upper DDR bank (phone default)')
     ap.add_argument('--dram-size', type=lambda s: int(s, 0), default=None,
                     help='override the kernel RAM size, e.g. 0x180000000 for an 8 GB guacamole')
+    ap.add_argument('--owned-memory-size', type=lambda s: int(s, 0), default=None,
+                    help='DarwinBoot contiguous window in bytes (256 MiB..8 GiB, 2 MiB steps)')
     ap.add_argument('--dump', action='store_true')
     args = ap.parse_args()
     if args.dump and os.path.exists(args.out):
@@ -244,7 +251,8 @@ if __name__ == '__main__':
         adt.dump(adt.parse(blob)[0])
         print(f'{args.out}: {len(blob)} bytes (existing file, not rebuilt)', file=sys.stderr)
         sys.exit(0)
-    root = build(qemu=args.qemu, highmem=args.highmem, device=args.device, dram_size=args.dram_size)
+    root = build(qemu=args.qemu, highmem=args.highmem, device=args.device,
+                 dram_size=args.dram_size, owned_memory_size=args.owned_memory_size)
     blob = adt.serialize(root)
     open(args.out, 'wb').write(blob)
     if args.dump:

@@ -2,37 +2,41 @@
 
 ## Active status (2026-10-22)
 
-- **The UniXNU chain is alive on hardware.** `boot-32-r13.img` (72,302,592
-  bytes, sha256 `395b3345...`, 64 MiB payload) boots via `fastboot boot`; the
-  menu lists **"OnePlus 7 Pro - XNU"** and loads
-  `\EFI\UniXNU\unixnu.toml` from the `GUACESP` FAT.
-- Selecting the entry reaches DarwinBoot and prints
-  `DARWINBOOT: inputs validated; exiting boot services`. The panel then stops
-  there; XNU has not produced its early framebuffer output yet. No partition
-  was written.
-- **Fixed in r14 (not yet hardware-tested).** DarwinBoot allocated the
-  kernel window at `2 MiB boundary + (Kernel.Base & 0x1fffff)`, i.e.
-  `...4000`. The 16 KiB guacamole kernel's `start.s` builds its bootstrap
-  KVA mapping from 32 MiB L2 blocks, so `PhysicalBase` must be congruent to
-  `Kernel.Base` modulo **32 MiB**, not 2 MiB. With `...4000` instead of
-  `...1004000` the first kernel fetch after `SCTLR_EL1.M` goes live is 16 MiB
-  off, which matches the silent stop after
-  `DARWINBOOT: inputs validated; exiting boot services`.
+- **Chain verified on hardware.** r13 boots the UniXNU menu and reads
+  `\EFI\UniXNU\unixnu.toml`; r14 reaches XNU's early console. No partition was
+  written.
+- **r14 32 MiB alignment fix verified.** The first r14 boot panicked in the
+  kernel, which proves the kernel entry and `start.s` mapping now work:
+  ```
+  SWEET EARLY PANIC: pmap_map_bd_with_options: no PIE for
+  vaddr=0xfffffe000c000000, virt=0xfffffe000a000000,
+  start=0x9c000000, end=0x9e400000, prot=0x3, options=0x1 @pmap.c:1035
+  ```
+  - DarwinBoot had allocated the window at `2 MiB boundary +
+    (Kernel.Base & 0x1fffff)`. The 16 KiB kernel's bootstrap KVA mapping uses
+    32 MiB L2 blocks, so `PhysicalBase` must be congruent modulo **32 MiB**;
+    the old layout put the first post-MMU fetch 16 MiB off.
   - `AllocateWindow` now uses
     `ALIGN_VALUE(PhysicalStart, SIZE_32MB) + (Kernel.Base & (SIZE_32MB - 1))`.
-    32 MiB is also a multiple of the 2 MiB L2 block used by 4 KiB kernels.
-  - The host simulation of the `start.s` block mapping gives
-    `old: VA -> PA +0x1000000`, `new: VA -> PA +0`.
-  - The rebuilt `DarwinBoot.efi` disassembles with
-    `and x11, x11, #0x1ffffff` (32 MiB mask).
-- **r14 image:** `out/guacamole/boot/boot-32-r14.img` (72,302,592 bytes,
-  sha256 `e1fa42dc...`), rebuilt FV `7bc92c83...`, 64 MiB payload.
-  The next hardware result should show the green DarwinBoot bar and either
-  XNU's `SWEET EARLY` markers or a kernel panic.
-- The default DarwinBoot window is still 256 MiB. If XNU enters but fails
-  later with little memory, add `owned_memory_size` to `[payload.adt]` to
-  emit `/chosen/darwinboot-memory-size` (256 MiB - 8 GiB, 2 MiB steps); the
-  working shim used 3 GiB.
+    Host simulation: old VA->PA `+0x1000000`, new `+0`. The rebuilt
+    `DarwinBoot.efi` disassembles with `and x11, x11, #0x1ffffff`.
+- **r15 fixes the panic: 3 GiB DarwinBoot window.** The panic is the
+  framebuffer `io_map` crossing an unmapped L3 boundary, not a bad PTE at the
+  first address. `arm_vm_init` reserves early I/O page tables for
+  `2 MiB + 10 MiB per 256 MiB of memSize + framebuffer size`. With the
+  default 256 MiB window that is only ~48 MiB; startup allocations push
+  `virtual_space_start` to `0xfffffe000a000000`, and the 0x2400000-byte
+  framebuffer then needs page tables past `0xfffffe000c000000`, where none
+  were reserved.
+  - `[payload.adt] owned_memory_size = "0xc0000000"` now emits
+    `/chosen/darwinboot-memory-size = 0xc0000000` (12 segments, ~158 MiB
+    reservation), matching the working shim's 3 GiB `memSize`.
+  - `mkadt.py` validates 256 MiB - 8 GiB in 2 MiB steps and exposes
+    `--owned-memory-size`; `make-guacamole-adt.py` forwards it.
+  - ADT dump confirms `darwinboot-memory-size = 0xc0000000`.
+- **r15 image:** `out/guacamole/boot/boot-32-r15.img` (72,302,592 bytes,
+  sha256 `ff672bce...`), FV `7bc92c83...`, payload `f74da572...`.
+  Hardware confirmation pending.
 - Local UniXNU, DarwinBoot and Aloha changes are exported as
   `patches/*.patch`; the external trees remain ignored.
 
@@ -53,14 +57,15 @@
 
 - `scripts/build-payload.py` produces a **64 MiB** FAT32 payload
   (`out/guacamole/payload/payload.img`) with `EFI/UniXNU/unixnu.toml`, the
-  17,206,448-byte guacamole kernel Mach-O, and the 12,592-byte ADT. The
-  wrapper runs `mkadt.py --device guacamole --dram-size 0xc0000000`.
+  17,206,448-byte guacamole kernel Mach-O, and the 12,636-byte ADT. The
+  wrapper runs `mkadt.py --device guacamole --dram-size 0xc0000000
+  --owned-memory-size 0xc0000000`.
   64 MiB is the minimum that yields a legal FAT32 cluster count (129,022;
   the earlier 32 MiB image had 64,496, below the 65,525 limit, and EDK2
   `FatDxe` refused to mount it).
-- `scripts/build-bootimg.py` packs `out/guacamole/boot/boot-32-r14.img`
-  (72,302,592 bytes, sha256 `e1fa42dc...`) with the rebuilt FV
-  (`7bc92c83...`), the full 2,779,551-byte Aloha DTB table, and patched
+- `scripts/build-bootimg.py` packs `out/guacamole/boot/boot-32-r15.img`
+  (72,302,592 bytes, sha256 `ff672bce...`, payload `f74da572...`) with the
+  rebuilt FV (`7bc92c83...`), the full 2,779,551-byte Aloha DTB table, and patched
   first-FDT `/chosen/linux,initrd-start/-end` at `0x836ff000`-relative
   values. The ABL relocates the payload and rewrites the properties on the
   live DTB; `ShengBootMemoryDxe` validates the `GUACESP` boot sector and
@@ -161,10 +166,10 @@ python3 scripts/build-payload.py
 python3 scripts/build-bootimg.py \
   --fd uefi/Build/SurfaceDuo1Pkg/DEBUG_CLANGPDB/FV/SM8150_EFI.fd \
   --dtb inputs/uefi-prebuilt/guacamole.dtb \
-  -o out/guacamole/boot/boot-32-r14.img
+  -o out/guacamole/boot/boot-32-r15.img
 
 # flash-free test
-fastboot boot out/guacamole/boot/boot-32-r14.img
+fastboot boot out/guacamole/boot/boot-32-r15.img
 ```
 
 Fastboot is only valid while the phone is in the bootloader. The UEFI USB

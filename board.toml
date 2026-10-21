@@ -79,6 +79,10 @@ kernel_args = [
 [payload.adt]
 tool = "scripts/make-guacamole-adt.py"
 unique_chip_id = "required"
+# Match the working shim window. 256 MiB leaves too little room in arm_vm_init's
+# early I/O page-table reservation for the 0x2400000-byte framebuffer; 3 GiB
+# also gives XNU the full kernel-managed RAM range.
+owned_memory_size = "0xc0000000"
 
 [bootimg.image]
 base = 0x0

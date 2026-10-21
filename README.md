@@ -17,10 +17,13 @@ Hardware-verified on a GM1910 with `fastboot boot` (no partition was written):
   `\EFI\UniXNU\unixnu.toml`, and passes it to DarwinBoot.
 - DarwinBoot reads `Payloads/kernel.macho` plus `.adt`, validates them, prints
   `DARWINBOOT: inputs validated; exiting boot services`, then hands off.
-- `boot-32-r14.img` fixes the handoff window: DarwinBoot now aligns the
-  physical base to the kernel's 32 MiB bootstrap L2 block (16 KiB XNU build)
-  instead of 2 MiB. Hardware confirmation is pending; the image also contains
-  the green-bar breadcrumb and the kernel's `SWEET EARLY` markers.
+- r14 fixes the handoff window: DarwinBoot aligns the physical base to the
+  kernel's 32 MiB bootstrap L2 block (16 KiB XNU build). Hardware confirms
+  this reaches XNU; the first r14 boot panicked in `arm_vm_init`'s early I/O
+  page-table reservation, not at kernel entry.
+- `boot-32-r15.img` requests a 3 GiB `/chosen/darwinboot-memory-size`, which
+  reserves enough early I/O page tables for the 36 MiB framebuffer. Hardware
+  confirmation is pending.
 
 The GPU/GMU bring-up is a kernel-side blocker and is tracked in `ios-sweet`.
 
@@ -84,7 +87,7 @@ python3 scripts/build-payload.py
 python3 scripts/build-bootimg.py \
   --fd uefi/Build/SurfaceDuo1Pkg/DEBUG_CLANGPDB/FV/SM8150_EFI.fd \
   --dtb inputs/uefi-prebuilt/guacamole.dtb \
-  -o out/guacamole/boot/boot-32-r14.img
+  -o out/guacamole/boot/boot-32-r15.img
 ```
 
 The payload is a 64 MiB FAT32 image. 32 MiB is not enough: it yields 64,496
@@ -99,7 +102,7 @@ publishes the resulting `GUACESP` volume.
 ## Test
 
 ```sh
-fastboot boot out/guacamole/boot/boot-32-r14.img
+fastboot boot out/guacamole/boot/boot-32-r15.img
 ```
 
 `fastboot boot` is temporary and leaves Android and every partition untouched.
