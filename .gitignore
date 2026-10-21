@@ -1,0 +1,13 @@
+/uefi/
+/unixnu/
+/reference/
+/inputs/
+/out/
+/.cache/
+*.img
+*.fd
+*.efi
+scripts/base-d22ap.adt
+__pycache__/
+
+/build-tree/
