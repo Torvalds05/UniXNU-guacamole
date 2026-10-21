@@ -10,21 +10,31 @@
   `DARWINBOOT: inputs validated; exiting boot services`. The panel then stops
   there; XNU has not produced its early framebuffer output yet. No partition
   was written.
-- **Leading hypothesis (host-side analysis, not hardware-verified):**
-  DarwinBoot allocates the kernel window at
-  `2 MiB boundary + (Kernel.Base & 0x1fffff)`, i.e. `...4000`. The 16 KiB
-  guacamole kernel's `start.s` builds its bootstrap KVA mapping from 32 MiB
-  L2 blocks, so `PhysicalBase` must be congruent to `Kernel.Base` modulo
-  **32 MiB**, not 2 MiB. With `...4000` instead of `...1004000` the first
-  kernel fetch after `SCTLR_EL1.M` goes live is 16 MiB off. The working
-  ios-sweet shim passes 32 MiB-aligned `virtBase`/`physBase` and does not hit
-  this.
-- The first candidate fix is one line in
-  `unixnu/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c`:
-  align `AllocateWindow`'s `Candidate` to `SIZE_32MB`. This is compatible
-  with 4 KiB kernels too (32 MiB is a multiple of the 2 MiB L2 block).
-- Local UniXNU and Aloha changes are exported as `patches/*.patch`; the
-  external trees remain ignored.
+- **Fixed in r14 (not yet hardware-tested).** DarwinBoot allocated the
+  kernel window at `2 MiB boundary + (Kernel.Base & 0x1fffff)`, i.e.
+  `...4000`. The 16 KiB guacamole kernel's `start.s` builds its bootstrap
+  KVA mapping from 32 MiB L2 blocks, so `PhysicalBase` must be congruent to
+  `Kernel.Base` modulo **32 MiB**, not 2 MiB. With `...4000` instead of
+  `...1004000` the first kernel fetch after `SCTLR_EL1.M` goes live is 16 MiB
+  off, which matches the silent stop after
+  `DARWINBOOT: inputs validated; exiting boot services`.
+  - `AllocateWindow` now uses
+    `ALIGN_VALUE(PhysicalStart, SIZE_32MB) + (Kernel.Base & (SIZE_32MB - 1))`.
+    32 MiB is also a multiple of the 2 MiB L2 block used by 4 KiB kernels.
+  - The host simulation of the `start.s` block mapping gives
+    `old: VA -> PA +0x1000000`, `new: VA -> PA +0`.
+  - The rebuilt `DarwinBoot.efi` disassembles with
+    `and x11, x11, #0x1ffffff` (32 MiB mask).
+- **r14 image:** `out/guacamole/boot/boot-32-r14.img` (72,302,592 bytes,
+  sha256 `e1fa42dc...`), rebuilt FV `7bc92c83...`, 64 MiB payload.
+  The next hardware result should show the green DarwinBoot bar and either
+  XNU's `SWEET EARLY` markers or a kernel panic.
+- The default DarwinBoot window is still 256 MiB. If XNU enters but fails
+  later with little memory, add `owned_memory_size` to `[payload.adt]` to
+  emit `/chosen/darwinboot-memory-size` (256 MiB - 8 GiB, 2 MiB steps); the
+  working shim used 3 GiB.
+- Local UniXNU, DarwinBoot and Aloha changes are exported as
+  `patches/*.patch`; the external trees remain ignored.
 
 ## 2026-10-21: project split
 
@@ -48,12 +58,14 @@
   64 MiB is the minimum that yields a legal FAT32 cluster count (129,022;
   the earlier 32 MiB image had 64,496, below the 65,525 limit, and EDK2
   `FatDxe` refused to mount it).
-- `scripts/build-bootimg.py` packs `out/guacamole/boot/boot-32-r13.img`
-  (72,302,592 bytes) with the rebuilt FV, the full 2,779,551-byte Aloha DTB
-  table, and patched first-FDT `/chosen/linux,initrd-start/-end` at
-  `0x836ff000`-relative values. The ABL relocates the payload and rewrites
-  the properties on the live DTB; `ShengBootMemoryDxe` validates the
-  `GUACESP` boot sector and publishes the block device.
+- `scripts/build-bootimg.py` packs `out/guacamole/boot/boot-32-r14.img`
+  (72,302,592 bytes, sha256 `e1fa42dc...`) with the rebuilt FV
+  (`7bc92c83...`), the full 2,779,551-byte Aloha DTB table, and patched
+  first-FDT `/chosen/linux,initrd-start/-end` at `0x836ff000`-relative
+  values. The ABL relocates the payload and rewrites the properties on the
+  live DTB; `ShengBootMemoryDxe` validates the `GUACESP` boot sector and
+  publishes the block device. The earlier r13 image is the one that first
+  showed the menu.
 - The appended DTB is not one FDT: the first blob's total-size field is
   `0x7bed2`. `build-bootimg.py` patches only that blob and preserves the
   rest byte for byte.
@@ -140,6 +152,7 @@
 ```sh
 # apply the framework patches to the external trees
 git -C unixnu apply ../patches/unixnu-guacamole.patch
+git -C unixnu/drivers/DarwinBoot apply ../../../patches/darwinboot-guacamole.patch
 git -C uefi apply ../patches/aloha-guacamole.patch
 
 # build (external inputs under inputs/)
@@ -147,10 +160,11 @@ python3 scripts/build-firmware.py
 python3 scripts/build-payload.py
 python3 scripts/build-bootimg.py \
   --fd uefi/Build/SurfaceDuo1Pkg/DEBUG_CLANGPDB/FV/SM8150_EFI.fd \
-  --dtb inputs/uefi-prebuilt/guacamole.dtb
+  --dtb inputs/uefi-prebuilt/guacamole.dtb \
+  -o out/guacamole/boot/boot-32-r14.img
 
 # flash-free test
-fastboot boot out/guacamole/boot/boot-32-r13.img
+fastboot boot out/guacamole/boot/boot-32-r14.img
 ```
 
 Fastboot is only valid while the phone is in the bootloader. The UEFI USB

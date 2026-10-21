@@ -17,9 +17,10 @@ Hardware-verified on a GM1910 with `fastboot boot` (no partition was written):
   `\EFI\UniXNU\unixnu.toml`, and passes it to DarwinBoot.
 - DarwinBoot reads `Payloads/kernel.macho` plus `.adt`, validates them, prints
   `DARWINBOOT: inputs validated; exiting boot services`, then hands off.
-- XNU has not yet produced its early framebuffer output. The current suspected
-  cause is the 2 MiB window alignment in DarwinBoot versus the 16 KiB XNU
-  kernel's 32 MiB bootstrap L2 blocks; see `NOTES.md`.
+- `boot-32-r14.img` fixes the handoff window: DarwinBoot now aligns the
+  physical base to the kernel's 32 MiB bootstrap L2 block (16 KiB XNU build)
+  instead of 2 MiB. Hardware confirmation is pending; the image also contains
+  the green-bar breadcrumb and the kernel's `SWEET EARLY` markers.
 
 The GPU/GMU bring-up is a kernel-side blocker and is tracked in `ios-sweet`.
 
@@ -48,13 +49,16 @@ git -C unixnu checkout b6ae99c
 git -C uefi checkout 0b798128
 
 git -C unixnu apply ../patches/unixnu-guacamole.patch
+git -C unixnu/drivers/DarwinBoot apply ../../../patches/darwinboot-guacamole.patch
 git -C uefi apply ../patches/aloha-guacamole.patch
 ```
 
 `patches/unixnu-guacamole.patch` carries the config-volume diagnostics, the
 volume-root path fix, the Aloha shim header check, and the firmware define
-formatting. `patches/aloha-guacamole.patch` carries the DTB-preserving
-BootShim, `ShengBootMemoryDxe`, the UniXNU/DarwinBoot INFs, and the guacamole
+formatting. `patches/darwinboot-guacamole.patch` makes the kernel window
+congruent with the 16 KiB XNU kernel's 32 MiB bootstrap L2 blocks.
+`patches/aloha-guacamole.patch` carries the DTB-preserving BootShim,
+`ShengBootMemoryDxe`, the UniXNU/DarwinBoot INFs, and the guacamole
 boot-image resources.
 
 ## Build inputs
@@ -79,7 +83,8 @@ python3 scripts/build-firmware.py
 python3 scripts/build-payload.py
 python3 scripts/build-bootimg.py \
   --fd uefi/Build/SurfaceDuo1Pkg/DEBUG_CLANGPDB/FV/SM8150_EFI.fd \
-  --dtb inputs/uefi-prebuilt/guacamole.dtb
+  --dtb inputs/uefi-prebuilt/guacamole.dtb \
+  -o out/guacamole/boot/boot-32-r14.img
 ```
 
 The payload is a 64 MiB FAT32 image. 32 MiB is not enough: it yields 64,496
@@ -94,7 +99,7 @@ publishes the resulting `GUACESP` volume.
 ## Test
 
 ```sh
-fastboot boot out/guacamole/boot/boot-32-r13.img
+fastboot boot out/guacamole/boot/boot-32-r14.img
 ```
 
 `fastboot boot` is temporary and leaves Android and every partition untouched.

@@ -5,12 +5,14 @@ The build depends on two upstream checkouts that are not vendored here.
 | Patch | Baseline | Applies in |
 |---|---|---|
 | `unixnu-guacamole.patch` | `UniXNU/UniXNU` `b6ae99c` | `unixnu/` |
+| `darwinboot-guacamole.patch` | `UniXNU/DarwinBoot` `85332b3` | `unixnu/drivers/DarwinBoot/` |
 | `aloha-guacamole.patch` | `Project-Aloha/mu_aloha_platforms` `0b798128` | `uefi/` |
 
 ## Apply
 
 ```sh
 git -C unixnu apply ../patches/unixnu-guacamole.patch
+git -C unixnu/drivers/DarwinBoot apply ../../../patches/darwinboot-guacamole.patch
 git -C uefi apply ../patches/aloha-guacamole.patch
 ```
 
@@ -34,6 +36,15 @@ checkout.
 - `scripts/unixnu/firmware.py`: build `defines` after `fields` exists, and
   substitute `{uefi}`, `{edk2}` and `{tree}` in define values.
 
+`darwinboot-guacamole.patch`
+
+- `DarwinBoot.c`: allocate the kernel window at a 32 MiB boundary plus
+  `Kernel.Base & (32 MiB - 1)`. The guacamole XNU kernel uses 16 KiB pages,
+  so `start.s` builds its bootstrap KVA mapping from 32 MiB L2 blocks. The
+  upstream 2 MiB congruence maps the first fetch after `SCTLR_EL1.M` goes
+  live 16 MiB away. 32 MiB is a multiple of the 2 MiB block used by 4 KiB
+  kernels, so one rule covers both.
+
 `aloha-guacamole.patch`
 
 - `BootShim/BootShim.S`: alias `UEFI_BASE`/`UEFI_SIZE` to the driver's
@@ -49,10 +60,11 @@ checkout.
 
 ## Refresh
 
-After changing either external tree:
+After changing an external tree:
 
 ```sh
-git -C unixnu diff > patches/unixnu-guacamole.patch
+git -C unixnu diff -- . ':(exclude)drivers/DarwinBoot' > patches/unixnu-guacamole.patch
+git -C unixnu/drivers/DarwinBoot diff > patches/darwinboot-guacamole.patch
 git -C uefi add -N Platforms/AndromedaPkg/Driver/ShengBootMemoryDxe Resources
 git -C uefi diff --binary -- . ':(exclude)MU_BASECORE' > patches/aloha-guacamole.patch
 git -C uefi reset -- Platforms/AndromedaPkg/Driver/ShengBootMemoryDxe Resources
