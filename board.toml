@@ -39,10 +39,15 @@ packages = [
 
 [firmware.defines]
 TARGET_DEVICE = "oneplus-guacamole"
+FDT = "guacamole.dtb"
+SHARED_CRYPTO_PATH = "{edk2}/CryptoPkg/Binaries/edk2-basecrypto-driver-bin_extdep"
+CONF_AUTOGEN_INCLUDE_PATH = "{uefi}/Common/MU/AndromedaPkg/Include"
+MU_SCHEMA_DIR = "{uefi}/Common/MU/AndromedaPkg/CfgData"
+MU_SCHEMA_FILE_NAME = "AndromedaPkgCfgData.xml"
 
 [payload]
 volume = "GUACESP"
-size_mib = 192
+size_mib = 64
 loader = "firmware"
 title = "OnePlus 7 Pro - XNU"
 dram_size = "0xc0000000"
@@ -78,6 +83,13 @@ unique_chip_id = "required"
 [bootimg.image]
 base = 0x0
 kernel_offset = 0x8000
+# The ABL adds abl_base (the "Kernel" RAM region at 0x80000000) to these
+# offsets. 0x1000000 would put a 32 MiB payload at 0x81000000-0x83000000,
+# past the 0x82A00000 end of the reserved Kernel region into the DBI MMIO
+# window, so the ABL does not load it. 0x800000 puts it at
+# 0x80800000-0x82800000, after the ~5 MiB kernel/DTB and inside the region.
+ramdisk_offset = 0x800000
+abl_base = 0x80000000
 tags_offset = 0x100
 pagesize = 4096
 header_version = 0

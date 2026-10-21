@@ -1,10 +1,36 @@
 # UniXNU-guacamole notes
 
+## Active status (2026-10-22)
+
+- **The UniXNU chain is alive on hardware.** `boot-32-r13.img` (72,302,592
+  bytes, sha256 `395b3345...`, 64 MiB payload) boots via `fastboot boot`; the
+  menu lists **"OnePlus 7 Pro - XNU"** and loads
+  `\EFI\UniXNU\unixnu.toml` from the `GUACESP` FAT.
+- Selecting the entry reaches DarwinBoot and prints
+  `DARWINBOOT: inputs validated; exiting boot services`. The panel then stops
+  there; XNU has not produced its early framebuffer output yet. No partition
+  was written.
+- **Leading hypothesis (host-side analysis, not hardware-verified):**
+  DarwinBoot allocates the kernel window at
+  `2 MiB boundary + (Kernel.Base & 0x1fffff)`, i.e. `...4000`. The 16 KiB
+  guacamole kernel's `start.s` builds its bootstrap KVA mapping from 32 MiB
+  L2 blocks, so `PhysicalBase` must be congruent to `Kernel.Base` modulo
+  **32 MiB**, not 2 MiB. With `...4000` instead of `...1004000` the first
+  kernel fetch after `SCTLR_EL1.M` goes live is 16 MiB off. The working
+  ios-sweet shim passes 32 MiB-aligned `virtBase`/`physBase` and does not hit
+  this.
+- The first candidate fix is one line in
+  `unixnu/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c`:
+  align `AllocateWindow`'s `Candidate` to `SIZE_32MB`. This is compatible
+  with 4 KiB kernels too (32 MiB is a multiple of the 2 MiB L2 block).
+- Local UniXNU and Aloha changes are exported as `patches/*.patch`; the
+  external trees remain ignored.
+
 ## 2026-10-21: project split
 
-- The UEFI/UniXNU bring-up is now a separate project at
-  `/home/invalidname/UniXNU-guacamole`. `ios-sweet` is unchanged except as the
-  source of the kernel, ADT, base ADT and the iOS root on the phone.
+- The UEFI/UniXNU bring-up is now a separate project (`UniXNU-guacamole`).
+  `ios-sweet` is unchanged except as the source of the kernel, ADT, base ADT
+  and the iOS root on the phone.
 - `uefi/` is the Project Aloha Mu-Silicium tree used by the prebuilt
   `oneplus-guacamole_NOSB.img` (773 MB, `.git` included). Its submodules were
   not checked out in `/tmp`; they are being initialized here.
@@ -13,41 +39,41 @@
   the working layout (`loader = "firmware"`, FAT payload ramdisk, DarwinBoot
   in the FV).
 
-## Current build state (2026-10-21 22:41)
+## Current build state (2026-10-22)
 
-- `scripts/build-payload.py` produced `out/guacamole/payload/payload.img`,
-  192 MiB, with `EFI/UniXNU/unixnu.toml`, the 17,206,448-byte guacamole
-  kernel Mach-O and the 12,592-byte ADT. The wrapper ran
-  `mkadt.py --device guacamole --dram-size 0xc0000000`.
-- `scripts/build-bootimg.py` packed `out/guacamole/boot/boot.img`,
-  206,438,400 bytes, with the prebuilt NOSB FV:
-  kernel 5,105,733 bytes (gzip(shim+FV) + full DTB), ramdisk 201,326,592,
-  kernel_addr 0x8000, tags 0x100, page 4096, header v0.
-- The prebuilt image's appended 2,779,551 bytes are not one FDT: the first
-  FDT's total-size field is 0x7bed2. `inputs/uefi-prebuilt/guacamole.dtb` is
-  the full table, matching the Aloha source and the prebuilt image.
-- `scripts/build-firmware.py` is running the Aloha NOSB build with the
-  UniXNU/DarwinBoot INFs. It initializes the Mu-Silicium submodules without
-  `--depth`, so the pinned Common/MU and Common/MU_OEM_SAMPLE commits win over
-  the shallow branch tips seen in the first init.
-- The prebuilt-FV boot image is only a packaging check: that FV has no
-  UniXNUDxe/UniXNU/DarwinBoot, so it cannot show the UniXNU menu. The test
-  image must use the rebuilt `SM8150_EFI.fd` once the firmware step finishes.
+- `scripts/build-payload.py` produces a **64 MiB** FAT32 payload
+  (`out/guacamole/payload/payload.img`) with `EFI/UniXNU/unixnu.toml`, the
+  17,206,448-byte guacamole kernel Mach-O, and the 12,592-byte ADT. The
+  wrapper runs `mkadt.py --device guacamole --dram-size 0xc0000000`.
+  64 MiB is the minimum that yields a legal FAT32 cluster count (129,022;
+  the earlier 32 MiB image had 64,496, below the 65,525 limit, and EDK2
+  `FatDxe` refused to mount it).
+- `scripts/build-bootimg.py` packs `out/guacamole/boot/boot-32-r13.img`
+  (72,302,592 bytes) with the rebuilt FV, the full 2,779,551-byte Aloha DTB
+  table, and patched first-FDT `/chosen/linux,initrd-start/-end` at
+  `0x836ff000`-relative values. The ABL relocates the payload and rewrites
+  the properties on the live DTB; `ShengBootMemoryDxe` validates the
+  `GUACESP` boot sector and publishes the block device.
+- The appended DTB is not one FDT: the first blob's total-size field is
+  `0x7bed2`. `build-bootimg.py` patches only that blob and preserves the
+  rest byte for byte.
+- The prebuilt-FV image has no `UniXNUDxe`/`UniXNU`/`DarwinBoot`; only the
+  rebuilt `SM8150_EFI.fd` shows the menu.
+- `scripts/build-firmware.py` drives the Aloha NOSB build. The local tree
+  needs the patches in `patches/aloha-guacamole.patch` (BootShim DTB save,
+  ShengBootMemoryDxe, UniXNU/DarwinBoot INFs, FDT/UniXNU libraries).
 
 ## Verified on the phone
 
-- Prebuilt Aloha `oneplus-guacamole_NOSB.img` boots via `fastboot boot`.
-  The host sees `045e:066b` (Qualcomm, `Q_SN:...`, vendor class 255), so the
-  UEFI is running. The phone is not in fastboot or adb while the UEFI runs.
-- The prebuilt image layout (extracted):
-  - decompressed shim+FV = 0x300070 bytes
-  - shim = 0x70 bytes; `_StackBase = 0x9FC00000`, `_StackSize = 0x00300000`
-  - FV = 0x00300000 bytes; DTB = 2,779,551 bytes
-  - Android v0 header: kernel_addr 0x8000, tags 0x100, pagesize 4096
+- `fastboot boot out/guacamole/boot/boot-32-r13.img` starts the rebuilt
+  firmware; the UniXNU menu lists **"OnePlus 7 Pro - XNU"**, proving the
+  FAT32 payload, `GUACESP` volume, config read, and `unixnu.toml` parse.
+- Selecting the entry reaches DarwinBoot:
+  `DARWINBOOT: inputs validated; exiting boot services`; the panel then stops
+  there. The earlier bootloader blockers are all resolved.
 - The Aloha guacamole FDF includes UFSDxe, FAT, PartitionDxe,
   RamPartitionDxe, SimpleFbDxe, BdsDxe. `DisplayDxe` is commented out.
-- The UEFI screen contents are still unconfirmed. The next hardware test must
-  record what is on the panel (Boot Manager, shell, Windows logo, black).
+- No partition was written; every test used `fastboot boot`.
 
 ## Existing guacamole kernel/ADT
 
@@ -85,42 +111,170 @@
   file now aliases them. The local `bootimg.py` header check was relaxed to
   accept the Aloha shim (`_StackSize` is the FV size, not shim+FV).
 
-## Firmware plan
+## Firmware integration (done)
 
-1. Initialize the Aloha submodules (`MU_BASECORE`, `Common/MU`,
-   `Common/MU_OEM_SAMPLE`, `CranePkg`, `SurfaceDuoACPI`, `Features/*`,
-   OpenSSL/MbedTLS).
-2. Add to `SurfaceDuo1NoSb.dsc` `[Components.common]` and to
-   `SurfaceDuo1.fdf` `FvMain`:
-   - `UniXNUPkg/Application/UniXNU/UniXNU.inf`
-   - `UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf`
-   - `DarwinBootPkg/Driver/DarwinBoot.inf`
-3. Build with the `unixnu` firmware step (`NoSb` DSC, `TARGET_DEVICE=oneplus-guacamole`,
-   output `Build/SurfaceDuo1Pkg/DEBUG_CLANGPDB/FV/SM8150_EFI.fd`).
-4. Test two paths:
-   - prebuilt NOSB FV + FAT payload with `EFI/BOOT/BOOTAA64.EFI` =
-     `UniXNU.efi`; confirms whether the prebuilt FV/ramdisk path works;
-   - rebuilt FV + FAT payload; the UniXNU/DarwinBoot drivers are in the FV.
+1. Build the Aloha NOSB FV with the UniXNU/DarwinBoot INFs (see
+   `patches/aloha-guacamole.patch` for the exact DSC/FDF changes).
+2. `ShengBootMemoryDxe` publishes the `GUACESP` FAT from the DTB initrd range
+   or, as a fallback, by scanning the UEFI memory map for the boot sector.
+3. `UniXNUDxe`/`UniXNU` load `\EFI\UniXNU\unixnu.toml` from that volume.
+4. `DarwinBoot` reads `Payloads/kernel.macho` and `.adt`, builds
+   `DARWIN_BOOT_ARGS`, exits boot services, and jumps to XNU at EL1.
 
 ## Open blockers
 
-- Screen state after the NOSB boot.
-- Whether the prebuilt Aloha FV's RamPartitionDxe exposes the Android ramdisk
-  as a SimpleFileSystem volume. If not, the rebuilt FV is mandatory.
-- GPU: the 0087 ARC dump is still pending; the bootloader change does not
-  address GMU/RSCC/ARC. The 0088/0089 kernel state is unchanged.
-- Secure Boot: use the NOSB image for unsigned UniXNU/DarwinBoot. Never the SB
-  variant.
+- **DarwinBoot -> XNU handoff.** DarwinBoot validates the kernel/ADT and exits
+  boot services, but XNU produces no early framebuffer output. The leading
+  cause is the 2 MiB window alignment described in the active status; the
+  fix is not yet applied or tested.
+- GPU/GMU: the ARC/RSCC/CM3 chain is still blocked in the kernel. The
+  bootloader change does not address it. See `ios-sweet` NOTES for the
+  latest GMU/RSCC evidence.
+- Secure Boot: use the NOSB image for unsigned UniXNU/DarwinBoot. Never the
+  SB variant.
 - No `.ipsw` URL is stored here; the IPSW/root is an external input. The
   payload path does not fetch it.
 
 ## Local commands
 
 ```sh
-cd /home/invalidname/UniXNU-guacamole
-git status
-cd unixnu && ./unixnu status -D ..
+# apply the framework patches to the external trees
+git -C unixnu apply ../patches/unixnu-guacamole.patch
+git -C uefi apply ../patches/aloha-guacamole.patch
+
+# build (external inputs under inputs/)
+python3 scripts/build-firmware.py
+python3 scripts/build-payload.py
+python3 scripts/build-bootimg.py \
+  --fd uefi/Build/SurfaceDuo1Pkg/DEBUG_CLANGPDB/FV/SM8150_EFI.fd \
+  --dtb inputs/uefi-prebuilt/guacamole.dtb
+
+# flash-free test
+fastboot boot out/guacamole/boot/boot-32-r13.img
 ```
 
 Fastboot is only valid while the phone is in the bootloader. The UEFI USB
 gadget is not usable for control.
+
+## 2026-10-22: the iPhone X 16.7.16 kernelcache cannot prelink this kernel
+
+- Extracted `kernelcache.release.iphone10b` from the iPhone X 16.7.16 IPSW
+  (18,204,358 bytes IM4P/LZFSE -> 50,937,884-byte arm64 Mach-O). Its kernel is
+  `Darwin Kernel Version 22.6.0 ... xnu-8796.142.1.703.8~1`.
+- The ios-sweet kernel (`xnu/out-guacamole/kernel.development.guacamole`,
+  sha256 `f9080dac...`) is `xnu-8796.141.3`. `NativePrelink.plan` stops at
+  `Kernel target 0xfffffff00734c520 has 0 native address candidates:
+  ['_vfs_getvfs_with_vfsops']`; the native kernel also lacks the UniXNU
+  `_kalloc_sparse_prelink_index_version` and
+  `_native_prelink_security_init_version` exports. Do not force the prelink.
+- The shipping kernel is monolithic: the last boot log registers `SWEET HFS`
+  and `SWEET AMFI`, and mounts the root as HFS
+  (`/dev/ufsroot0 on / (hfs, local, journaled, noatime)`). It does not load a
+  kext kernelcache, so the iPhone X kernelcache is not needed for this boot
+  chain. DarwinBoot maps `[Kernel.Base, Kernel.End]` as one window; a prelink
+  would also have to put every kext in the kernel's reserved low hole.
+- Current images already use the raw kernel: `out/guacamole/payload/payload.img`
+  (32 MiB, `payload_kernel_sha256=f9080dac...`) and
+  `out/guacamole/boot/boot-32-r2.img` (38,748,160 bytes, sha256
+  `391e199c...`, rebuilt FV `ddef072a...`). They are ready for a
+  `fastboot boot` hardware test; no IPSW input is required.
+
+## 2026-10-22: UniXNU menu had no XNU entry (payload volume missing)
+
+- The rebuilt FV does contain `ShengBootMemoryDxe`, `UniXNU`, `UniXNUDxe`
+  and `DarwinBoot` (FVMAIN GUIDs and `Guid.xref`). The menu that appeared was
+  the application's built-in fallback (`Return to firmware`, `Restart`,
+  `Power off`), not an Aloha BDS menu.
+- Cause: `UniXNU` scans `SimpleFileSystem` volumes for
+  `\EFI\UniXNU\unixnu.toml`. The payload FAT is the Android boot image
+  ramdisk. The generated image had `ramdisk_addr = 0`; the stock Aloha image
+  uses `0x1000000`. The OnePlus ABL does not add
+  `/chosen/linux,initrd-start/-end` to this UEFI DTB (the Aloha DTB only has
+  `bootargs`), so `ShengBootMemoryDxe` had no initrd to publish.
+- Fix in `board.toml`: `ramdisk_offset = 0x1000000`. `scripts/build-bootimg.py`
+  now also patches the first FDT of the multi-FDT table (preserving the
+  appended tables) with `linux,initrd-start = 0x1000000` and
+  `linux,initrd-end = 0x3000000` for the 32 MiB payload.
+- Built and booted: `boot-32-r3.img` (ramdisk address only) and
+  `boot-32-r4.img` (address + DTB properties), both with rebuilt FV
+  `ddef072a...`. r4 header: ramdisk 0x1000000/0x2000000, payload bytes match,
+  first FDT props verified. r4 was started with `fastboot boot`; visual menu
+  confirmation is pending.
+
+## 2026-10-22: r5 fixes the missing DTB pointer (Info Block clobber)
+
+- r4 still showed `no boot entry found`. Root cause: `BootShim.S` saved the
+  DTB pointer from x0 at `0x9FFFF000`, but that address is the firmware
+  **Info Block** in the guacamole memory map
+  (`PlatformMemoryMapLib.c`: `"Info Blk", 0x9FFFF000`). By the time
+  `ShengBootMemoryDxe` ran, x0 was gone, so it never saw
+  `/chosen/linux,initrd-start/-end` and never published the payload FAT.
+  The DTB patch in r4 was irrelevant because the pointer itself was clobbered.
+- r5: `BootShim.S` stores x0 at `0x9FF92000`, the memory map's reserved
+  `"RAM Partition"`; `ShengBootMemoryDxe` reads that address and, before
+  publishing, removes the initrd range from the GCD so the DXE allocator
+  cannot overwrite the FAT.
+- Local build fixes needed for the FV: `firmware.py` used `fields` before
+  assignment; `board.toml` needs `SHARED_CRYPTO_PATH` pointing at
+  `{edk2}/CryptoPkg/Binaries/edk2-basecrypto-driver-bin_extdep` and
+  `FDT = "guacamole.dtb"`; the EDK2 `BinWrappers/PosixLike` tools in this
+  tree drop `$@` when `Conf/BaseToolsCBinaries` exists, so the extdep
+  binaries were copied into `MU_BASECORE/BaseTools/Source/C/bin`.
+- r5: `out/guacamole/boot/boot-32-r5.img`, sha256
+  `94f823b7...`, FV `79b9dd77...`, ramdisk 0x1000000/0x2000000, first-FDT
+  initrd props present, payload bytes match. Booted with `fastboot boot`.
+  The `045e:066b` UEFI USB gadget disappeared after the 3 s menu timeout and
+  the phone did not return to fastboot, which is consistent with UniXNU
+  finding the XNU entry and entering DarwinBoot/XNU (`sweetusb=0` disables
+  kernel USB). Screen confirmation pending.
+- r6 (after r5 still showed `no boot entry found`): `ShengBootMemoryDxe`
+  now falls back to walking the UEFI memory map and looking for the payload
+  FAT32 boot sector by its `GUACESP` label. If the ABL loaded the 32 MiB
+  payload anywhere in RAM this publishes it without trusting the DTB or the
+  header address. Image `boot-32-r6.img`, sha256 `8f66b31a...`, FV
+  `40c4020b...`; booted with `fastboot boot`.
+- r6 still showed `no boot entry found`, so the scan did not find the FAT.
+  Root cause: the ABL adds its RAM base **0x80000000** to the boot image
+  offsets. `ramdisk_offset=0x1000000` therefore loaded at
+  `0x81000000..0x83000000`, but the reserved `"Kernel"` region is
+  `0x80000000..0x82A00000`; the 32 MiB payload ran into the `"DBI Dump"`
+  MMIO window at 0x82A00000, so the ABL did not load it (the stock image's
+  6-byte ramdisk did fit).
+- r7: `ramdisk_offset=0x800000` -> physical `0x80800000..0x82800000`,
+  inside the Kernel region after the ~5 MiB kernel/DTB. `build-bootimg.py`
+  now writes the physical addresses (`abl_base + base + offset`) into
+  `/chosen`. Header ramdisk_addr 0x800000, first-FDT props
+  0x80800000/0x82800000, payload bytes match. Image `boot-32-r7.img`,
+  sha256 `04967862...`, FV `40c4020b...`; booted with `fastboot boot`.
+- r9 status on screen: `d1 i1 s0 @836ff000`. The ABL patched the DTB
+  `/chosen` and loaded the 32 MiB payload at physical **0x836ff000** (not the
+  header offset/base); `ShengBootMemoryDxe` validated the `GUACESP` FAT boot
+  sector and published the block device (`i1`). The scan did not run (`s0`).
+- r10 volume diagnostic: `volumes 8`, `guac 0`; the app sees 8
+  SimpleFileSystem volumes but none reports a `GUACESP` label. The payload
+  block device exists, so the open question is whether FatDxe bound it (or
+  only the label is missing).
+- r11: `OpenPath` now strips leading backslashes before `Root->Open` (the
+  config PCD is `\EFI\UniXNU\unixnu.toml`; some FAT/FV drivers reject an
+  absolute-looking name on a volume root). Image `boot-32-r11.img`, sha256
+  `1e6a086b...`, FV `b2e83b4b...`; booted with `fastboot boot`.
+- r12: the payload block device was installed with
+  `EFI_BLOCK_IO_MEDIA.LogicalPartition = FALSE` (whole disk), so the FV's
+  `PartitionDxe` could bind it first and block `FatDxe`; the app saw only the
+  FV/UFS SimpleFileSystem volumes (`guac 0`). The payload is a FAT volume
+  image, so it is now marked `LogicalPartition = TRUE`; `PartitionDxe` skips
+  it and `FatDxe` can bind directly. Image `boot-32-r12.img`, sha256
+  `d72efed6...`, FV `867e1d9c...`; booted with `fastboot boot`.
+- r13: actual reason the FAT volume never appeared (`guac 0` even with
+  `i1 @836ff000`): the 32 MiB payload was FAT32 with only **64,496 clusters**,
+  below the FAT32 minimum **65,525**. `fsck.vfat` warns and EDK2 `FatDxe`
+  refuses to mount it; `ShengBootMemoryDxe` only checks the boot sector, so it
+  still published the block device. `board.toml [payload] size_mib` is now
+  **64**; the rebuilt payload has **129,022 clusters**, valid FAT32. Image
+  `boot-32-r13.img`, sha256 `395b3345...`, 72,302,592 bytes; booted with
+  `fastboot boot`.
+- **r13 verified on hardware (2026-10-22):** the UniXNU menu now lists
+  **"OnePlus 7 Pro - XNU"** and loads the config from the `GUACESP` payload
+  FAT. The 32 MiB FAT32 was the last blocker; the earlier DTB pointer,
+  ramdisk address, and FatDxe/PartitionDxe fixes were all required, but the
+  invalid FAT32 cluster count was what kept the volume from mounting.
