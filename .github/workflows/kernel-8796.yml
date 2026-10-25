@@ -36,7 +36,7 @@ jobs:
         run: ./unixnu/unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 -D .
 
       - name: Build kernel
-        run: ./unixnu/unixnu build kernel -D . || true
+        run: ./unixnu/unixnu build kernel -D .
 
       - name: Upload build output
         if: always()
