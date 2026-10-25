@@ -27,6 +27,22 @@ Hardware-verified on a GM1910 with `fastboot boot` (no partition was written):
 
 The GPU/GMU bring-up is a kernel-side blocker and is tracked in `ios-sweet`.
 
+## Kernel build (branch `kernel-8796`)
+
+The `kernel-8796` branch replaces the copied ios-sweet kernel with a UniXNU
+build of `xnu-8796.141.3`:
+
+- 4 KiB `BCM2837` machine config, `ArmDTPlatform`, `ArmCpu`, source
+  corecrypto and libpthread 514;
+- device-specific `feeds.toml`, `unixnu.lock`, `configs/guacamole_8796_defconfig`
+  and a 24-patch `patches/xnu/` series;
+- macOS workflow `kernel-8796` builds and seals
+  `out/guacamole/kernel/kernel-8796.macho`.
+
+The kernel currently builds, but storage/display drivers and
+`[kernel.prelink]` are still to be ported. The r15 16 KiB chain remains the
+known-good fallback.
+
 ## Layout
 
 ```
@@ -102,8 +118,16 @@ publishes the resulting `GUACESP` volume.
 ## Test
 
 ```sh
-fastboot boot out/guacamole/boot/boot-32-r15.img
+fastboot boot out/guacamole/boot/boot-32-r15-retest.img
 ```
+
+The `kernel-8796` branch carries a from-source XNU 8796 rebuild. The verified
+userspace image is the r15 reproduction (`boot-32-r15-retest.img`, ios-sweet
+`kernel.development.guacamole`, sha256 `f9080dac...`), which reaches the iOS
+userland on hardware. The from-source kernel currently stops in `setconf`
+(UFS DMA allocation); the prelink route is ruled out for this kernel and the
+next step is porting the ios-sweet monolithic patch set (100 of 102 patches
+apply cleanly to a fresh 8796 tree).
 
 `fastboot boot` is temporary and leaves Android and every partition untouched.
 Use the NOSB image only; secure-boot builds cannot load the unsigned

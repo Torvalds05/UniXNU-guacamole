@@ -45,6 +45,31 @@ CONF_AUTOGEN_INCLUDE_PATH = "{uefi}/Common/MU/AndromedaPkg/Include"
 MU_SCHEMA_DIR = "{uefi}/Common/MU/AndromedaPkg/CfgData"
 MU_SCHEMA_FILE_NAME = "AndromedaPkgCfgData.xml"
 
+[kernel]
+# 4 KiB BCM2837 build with the iOS 16.7.16 source and UniXNU 4K patches.
+defconfig = "guacamole_8796_defconfig"
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "build-arm-driver.py ArmDTPlatform",
+  "build-arm-driver.py ArmCpu",
+  "build-libpthread-kernel.py",
+]
+
+[kernel.prelink]
+tool = "kits/NativePrelink/emit_prelink.py"
+kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped"
+kernelcache_sha256 = "2ec297bac95bcba01046fd0148e97e7e5885c05a6c18827f39f534ba375c1221"
+slide = "-0x1000000"
+roots = [
+  "com.apple.driver.AppleARMPlatform",
+  "com.apple.driver.AppleARMWatchdogTimer",
+  "com.apple.filesystems.hfs.kext",
+  "com.apple.iokit.IOHIDFamily",
+  "com.apple.iokit.IOReportFamily",
+  "com.apple.iokit.IOStorageFamily",
+]
+
 [payload]
 volume = "GUACESP"
 size_mib = 64
